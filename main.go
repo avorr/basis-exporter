@@ -20,27 +20,23 @@ const (
 )
 
 var (
-	Api                *client.Api
-	computeReqDuration time.Duration
-	deskReqDuration    time.Duration
-	totalReqDuration   time.Duration
-	port               string
-	region             string
-	req2xxCount        float64
-	req5xxCount        float64
+	//FOO                string
+	appVersion  = "dev"
+	Api         *client.Api
+	port        string
+	region      string
+	req4xxCount float64
+	req5xxCount float64
 )
 
 type Collector struct {
-	fooMetric               *prometheus.Desc
-	barMetric               *prometheus.Desc
-	cpuMetric               *prometheus.GaugeVec
-	ramMetric               *prometheus.GaugeVec
-	diskMetric              *prometheus.GaugeVec
-	reqCount                *prometheus.GaugeVec
-	portalApiLatency        *prometheus.GaugeVec
-	portalApiLatencyCompute *prometheus.GaugeVec
-	portalApiLatencyDisks   *prometheus.GaugeVec
-	computeMetrics          ComputeMetrics
+	fooMetric  *prometheus.Desc
+	barMetric  *prometheus.Desc
+	cpuMetric  *prometheus.GaugeVec
+	ramMetric  *prometheus.GaugeVec
+	diskMetric *prometheus.GaugeVec
+	reqCount   *prometheus.GaugeVec
+	duration   *prometheus.HistogramVec
 }
 
 type Disks struct {
@@ -164,17 +160,17 @@ type DiskData struct {
 	//Params      string `json:"params"`
 	//ParentID    int    `json:"parentId"`
 	//PciSlot     int    `json:"pciSlot"`
-	//Pool string `json:"pool"`+
+	Pool string `json:"pool"`
 	//PresentTo   []int  `json:"presentTo"`
 	//PurgeTime   int    `json:"purgeTime"`
-	//ResID   string `json:"resId"`
+	ResID string `json:"resId"`
 	//ResName string `json:"resName"`
 	//Role        string `json:"role"`
-	//SepID   int    `json:"sepId"`+
-	//SepType string `json:"sepType"`+
+	SepID   int    `json:"sepId"`
+	SepType string `json:"sepType"`
 	//Shareable   bool   `json:"shareable"`
-	SizeMax int `json:"sizeMax"`
-	//SizeUsed float64 `json:"sizeUsed"`+
+	SizeMax  int     `json:"sizeMax"`
+	SizeUsed float64 `json:"sizeUsed"`
 	//Snapshots  []any  `json:"snapshots"`
 	//Status     string `json:"status"`
 	//TechStatus string `json:"techStatus"`
@@ -182,11 +178,7 @@ type DiskData struct {
 	//Vmid int    `json:"vmid"`
 }
 
-type ComputeMetrics interface {
-	GetComputes() ([]Data, []DiskData, error)
-}
-
-func NewFooCollector(metrics ComputeMetrics, reg *prometheus.Registry) *Collector {
+func NewFooCollector(reg *prometheus.Registry) *Collector {
 	labels := []string{
 		"name",
 		"location",
@@ -214,6 +206,11 @@ func NewFooCollector(metrics ComputeMetrics, reg *prometheus.Registry) *Collecto
 		"accountName",
 		"rgId",
 		"rgName",
+		"resId",
+		"pool",
+		"sepId",
+		"sepType",
+		"sizeUsed",
 		"id",
 		"ip",
 		"disk_type",
@@ -227,81 +224,39 @@ func NewFooCollector(metrics ComputeMetrics, reg *prometheus.Registry) *Collecto
 		"monitor",
 	}
 
-	requestLabels := []string{
-		"api_endpoint",
-		"hostname",
-		"instance",
-		"job",
-		"le",
-		"monitor",
-	}
-
 	f := &Collector{
 		cpuMetric: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "portal_server_cpu",
-			Help: "Compute cpu",
+			Namespace: "portal",
+			Name:      "server_cpu",
+			Help:      "Compute cpu",
 		}, labels),
-		////portal_server_cpu {accountId="1", accountName="name", resource_group_id="2", resource_name="rg_name", net_id="3", net_name="extnet", id="12", compute="test_vm", ip="172.22.0.12"} 4
-		//			portal_server_ram {accountId="1", accountName="name", resource_group_id="2", resource_name="rg_name", net_id="3", net_name="extnet", id="12", compute="test_vm", ip="172.22.0.12"} 8
-		//fooMetric: prometheus.NewDesc("foo_metric", "Shows whether a foo has occurred in our cluster", nil, labels),
 		ramMetric: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "portal_server_ram",
-			Help: "Compute ram",
+			Namespace: "portal",
+			Name:      "server_ram",
+			Help:      "Compute ram",
 		}, labels),
 		diskMetric: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "portal_server_disk",
-			Help: "Compute ram",
+			Namespace: "portal",
+			Name:      "server_disk",
+			Help:      "Compute ram",
 		}, diskLabels),
 		reqCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "portal_api_requests_total",
-			Help: "Status code 200 counter",
+			Namespace: "portal",
+			Name:      "api_requests_total",
+			Help:      "Status code 2xx and 5xx counter",
 		}, counterLabels),
-		portalApiLatency: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "portal_api_latency_bucket",
-			Help: "Api response time",
-		}, requestLabels),
-		portalApiLatencyCompute: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "portal_api_latency_compute",
-			Help: "Api response compute time",
-		}, requestLabels),
-		portalApiLatencyDisks: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "portal_api_latency_disks",
-			Help: "Api response disks time",
-		}, requestLabels),
-		computeMetrics: metrics,
+		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "portal",
+			Name:      "api_request",
+			Help:      "Duration of the request.",
+			// Buckets: prometheus.ExponentialBuckets(0.1, 1.5, 5),
+			// Buckets: prometheus.LinearBuckets(0.1, 5, 5),
+			//Buckets: []float64{0.1, 0.15, 0.2, 0.25, 0.3},
+			Buckets: []float64{30, 50, 70, 90, 110, 130, 150, 170, 190},
+		}, []string{"api_endpoint", "status", "method"}),
 	}
 
-	//var requestsCounter uint64 = 0
-	// register counter in Prometheus collector
-	//prometheus.MustRegister(prometheus.NewCounterFunc(
-	//func() float64 {
-	//	return float64(atomic.LoadUint64(&requestsCounter))
-	//}))
-	// somewhere in your code
-	//atomic.AddUint64(&requestsCounter, 1)
-	//var requestsCounter uint64 = 0
-
-	// register counter in Prometheus collector
-	//prometheus.MustRegister(prometheus.NewCounterFunc(
-	//prometheus.CounterOpts{
-	//	Name: "requests_total",
-	//	Help: "Counts number of requests",
-	//},
-
-	//),
-	//)
-
-	// somewhere in your code
-	//atomic.LoadUint64(&requestsCounter)
-	//atomic.AddUint64(&requestsCounter, 1)
-
-	reg.MustRegister(f.cpuMetric)
-	reg.MustRegister(f.ramMetric)
-	reg.MustRegister(f.diskMetric)
-	reg.MustRegister(f.reqCount)
-	reg.MustRegister(f.portalApiLatency)
-	reg.MustRegister(f.portalApiLatencyCompute)
-	reg.MustRegister(f.portalApiLatencyDisks)
+	reg.MustRegister(f.cpuMetric, f.ramMetric, f.diskMetric, f.reqCount, f.duration)
 	return f
 }
 
@@ -325,12 +280,13 @@ func getInterfaceInfo(interfaces []Interfaces) (map[string]string, error) {
 }
 
 func (collector *Collector) Collect(ch chan<- prometheus.Metric) {
-	totalReqStart := time.Now()
-	computes, disks, err := collector.computeMetrics.GetComputes()
+	computes, disks, err := collector.GetComputes()
 	if err != nil {
 		log.Fatal(err)
 	}
-	totalReqDuration = time.Since(totalReqStart)
+	if computes == nil || disks == nil {
+		return
+	}
 
 	volumeMap := make(map[int]DiskData)
 
@@ -390,6 +346,20 @@ func (collector *Collector) Collect(ch chan<- prometheus.Metric) {
 			if diskName == "" {
 				diskName = NA
 			}
+			diskPool := volumeMap[disk.ID].Pool
+			if diskPool == "" {
+				diskPool = NA
+			}
+			resId := volumeMap[disk.ID].ResID
+			if resId == "" {
+				resId = NA
+			}
+			sepId := volumeMap[disk.ID].SepID
+			sepType := volumeMap[disk.ID].SepType
+			if sepType == "" {
+				sepType = NA
+			}
+			sizeUsed := volumeMap[disk.ID].SizeUsed
 
 			diskLabels := map[string]string{
 				"name":             compute.Name,
@@ -403,7 +373,12 @@ func (collector *Collector) Collect(ch chan<- prometheus.Metric) {
 				//"resource_group_id": strconv.Itoa(compute.RgID),
 				"rgId": strconv.Itoa(compute.RgID),
 				//"resource_name":     compute.ResName,
-				"rgName": compute.RgName,
+				"rgName":   compute.RgName,
+				"resId":    resId,
+				"pool":     diskPool,
+				"sepId":    strconv.Itoa(sepId),
+				"sepType":  sepType,
+				"sizeUsed": strconv.FormatFloat(sizeUsed, 'f', 6, 64),
 				//"net_id": netInfo["net_id"],
 				//"net_name":   netInfo["net_name"],
 				"id": strconv.Itoa(compute.ID),
@@ -417,59 +392,6 @@ func (collector *Collector) Collect(ch chan<- prometheus.Metric) {
 			collector.diskMetric.With(diskLabels).Set(float64(volumeMap[disk.ID].SizeMax))
 		}
 	}
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = NA
-		fmt.Println(err)
-	}
-
-	reqLabels := map[string]string{
-		"code_status": "200",
-		"hostname":    hostname,
-		"instance":    fmt.Sprintf("%s:%s", hostname, port),
-		"job":         "portal_exporter",
-		"monitor":     strings.ToLower(region),
-	}
-
-	req2xxCount += 1
-	collector.reqCount.With(reqLabels).Set(req2xxCount)
-
-	reqLatency := map[string]string{
-		"api_endpoint": client.ApiUrl,
-		"hostname":     hostname,
-		"instance":     fmt.Sprintf("%s:%s", hostname, port),
-		"job":          "portal_exporter",
-		"le":           "+inf",
-		"monitor":      strings.ToLower(region),
-	}
-
-	collector.portalApiLatency.With(reqLatency).Set(totalReqDuration.Minutes())
-
-	reqLatency["api_endpoint"] = fmt.Sprintf("%s/%s", client.ApiUrl, "compute/list")
-	collector.portalApiLatencyCompute.With(reqLatency).Set(computeReqDuration.Minutes())
-
-	reqLatency["api_endpoint"] = fmt.Sprintf("%s/%s", client.ApiUrl, "disks/list")
-	collector.portalApiLatencyDisks.With(reqLatency).Set(deskReqDuration.Minutes())
-
-	//computes := GetComputeInfo()
-	//var result Computes
-	//err := json.Unmarshal(computes, &result)
-	//if err != nil {
-	//log.Fatal(err)
-	//}
-
-	//for _, i2 := range result.Data {
-	//	labels := map[string]string{"cluster_name": i2.Name, "vdcname": i2.Desc, "value": i2.RgName}
-	//	collector.gmetric.With(labels).Set(metricValue)
-	//}
-
-	//m1 := prometheus.MustNewConstMetric(collector.fooMetric, prometheus.GaugeValue, metricValue)
-	//m2 := prometheus.MustNewConstMetric(collector.barMetric, prometheus.GaugeValue, metricValue)
-	//m1 = prometheus.NewMetricWithTimestamp(time.Now().Add(-time.Hour), m1)
-	//m2 = prometheus.NewMetricWithTimestamp(time.Now(), m2)
-	//ch <- m1
-	//ch <- m2
 }
 
 func init() {
@@ -485,33 +407,18 @@ func init() {
 }
 
 func main() {
-	//var foo metrics
-	//foo.GetComputes()
-	//return
-	//var m metrics
-	//computes, _, err := m.GetComputes()
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
-	//volumeMap := make(map[int]DiskData)
-	//for _, disk := range disks {
-	//	if disk.SizeMax != 50 {
-	//		volumeMap[disk.ID] = disk
-	//	}
-	//}
-
 	reg := prometheus.NewPedanticRegistry()
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}), collectors.NewGoCollector())
-	collector := NewFooCollector(&metrics{}, reg)
+	collector := NewFooCollector(reg)
 	if err := reg.Register(collector); err != nil {
 		panic(err)
 	}
 
-	http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg}))
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), nil))
 }
 
-func GetComputeInfo() ([]byte, []byte) {
+func (collector *Collector) GetComputeInfo() ([]byte, []byte) {
 	Api = client.NewApi()
 	if err := Api.Auth(); err != nil {
 		log.Fatalf(err.Error())
@@ -519,42 +426,92 @@ func GetComputeInfo() ([]byte, []byte) {
 
 	out1 := make(chan []byte)
 	out2 := make(chan []byte)
+	done := make(chan bool)
 
 	//var wg sync.WaitGroup
 	//var data = strings.NewReader("page=1&size=1")
 
 	go func() {
-		computeReqStart := time.Now()
-		resp, err := Api.NewRequestPost("compute/list", strings.NewReader(""))
+		//computeReqStart := time.Now()
+		now := time.Now()
+		resp, statusCode, err := Api.NewRequestPost("compute/list", strings.NewReader(""))
+		collector.duration.With(prometheus.Labels{
+			"api_endpoint": fmt.Sprintf("%s/%s", client.ApiUrl, "compute/list"),
+			"method":       "GET",
+			"status":       strconv.Itoa(statusCode),
+		}).Observe(time.Since(now).Seconds())
+
 		//resp, err := ReadFromFile("data.txt")
+		if statusCode >= 400 && statusCode <= 499 {
+			req4xxCount++
+			done <- false
+			return
+		}
+		if statusCode >= 500 && statusCode <= 526 {
+			req5xxCount++
+			done <- false
+			return
+		}
 		if err != nil {
+			done <- false
 			log.Println(err)
 		}
-		computeReqDuration = time.Since(computeReqStart)
 		//WriteToFile(resp, "computes.txt")
+		done <- true
 		out1 <- resp
 	}()
 
 	go func() {
-		diskReqStart := time.Now()
-		diskResp, err := Api.NewRequestPost("disks/list", strings.NewReader(""))
+		now := time.Now()
+		diskResp, statusCode, err := Api.NewRequestPost("disks/list", strings.NewReader(""))
+
+		collector.duration.With(prometheus.Labels{
+			"api_endpoint": fmt.Sprintf("%s/%s", client.ApiUrl, "disks/list"),
+			"method":       "GET",
+			"status":       strconv.Itoa(statusCode),
+		}).Observe(time.Since(now).Seconds())
+
 		//diskResp, err := ReadFromFile("disks.txt")
+		if statusCode >= 400 && statusCode <= 499 {
+			req4xxCount++
+			done <- false
+			return
+		}
+		if statusCode >= 500 && statusCode <= 526 {
+			req5xxCount++
+			done <- false
+			return
+		}
 		if err != nil {
+
+			done <- false
 			log.Println(err)
 		}
-		deskReqDuration = time.Since(diskReqStart)
 		//WriteToFile(diskResp, "disks.txt")
+		done <- true
 		out2 <- diskResp
 	}()
 
+	var requestsResult bool
+	for j := 0; j <= 1; j++ {
+		requestsResult = <-done
+		if !requestsResult {
+			break
+		}
+	}
+
+	if !requestsResult {
+		return nil, nil
+	}
+
 	return <-out1, <-out2
-	//return resp, diskResp
 }
 
-type metrics struct{}
-
-func (d *metrics) GetComputes() ([]Data, []DiskData, error) {
-	respBytes, disksResp := GetComputeInfo()
+func (collector *Collector) GetComputes() ([]Data, []DiskData, error) {
+	respBytes, disksResp := collector.GetComputeInfo()
+	if respBytes == nil || disksResp == nil {
+		return nil, nil, nil
+	}
 
 	var computes Computes
 	if err := json.Unmarshal(respBytes, &computes); err != nil {

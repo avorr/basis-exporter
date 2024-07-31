@@ -54,35 +54,7 @@ func NewApi() *Api {
 	}
 }
 
-func (o *Api) NewRequest2(method, resource string, body *strings.Reader, expectCode int) (*Request2, error) {
-	request := &Request2{
-		Debug:         o.Debug,
-		Url:           fmt.Sprintf("%s/%s", o.Host, resource),
-		Method:        method,
-		Authorization: fmt.Sprintf("Bearer %s", o.Token),
-	}
-
-	if body != nil {
-		request.Body = body
-	}
-	err := request.Make2()
-	if err != nil {
-		return nil, err
-	}
-	if request.Response.StatusCode != expectCode {
-		return request, fmt.Errorf(
-			"wrong statusCode from API: %d, expect: %d, resource [%s], response: %s",
-			request.Response.StatusCode,
-			expectCode,
-			resource,
-			string(request.ResponseBody),
-		)
-	}
-	return request, nil
-}
-
-func (o *Api) NewRequest(method, resource string, body []byte, expectCode int) (*Request, error) {
-	//func (o *Api) NewRequest(method, resource string, body *strings.Reader, expectCode int) (*Request, error) {
+func (o *Api) NewRequest(method, resource string, body *strings.Reader, expectCode int) (*Request, error) {
 	request := &Request{
 		Debug:         o.Debug,
 		Url:           fmt.Sprintf("%s/%s", o.Host, resource),
@@ -111,17 +83,18 @@ func (o *Api) NewRequest(method, resource string, body []byte, expectCode int) (
 
 func (o *Api) Auth() error {
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-	paramString := fmt.Sprintf("grant_type=client_credentials&client_id=%s&client_secret=%s&response_type=id_token", clientId, clientSecret)
+	paramString := fmt.Sprintf(
+		"grant_type=client_credentials&client_id=%s&client_secret=%s&response_type=id_token",
+		clientId,
+		clientSecret,
+	)
 	var data = strings.NewReader(paramString)
-	req, err := http.NewRequest(http.MethodPost, authUrl, data)
-	if err != nil {
-		log.Fatal(err)
-	}
+	req, _ := http.NewRequest(http.MethodPost, authUrl, data)
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	defer func(Body io.ReadCloser) {
@@ -131,54 +104,17 @@ func (o *Api) Auth() error {
 	}(resp.Body)
 	token, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	o.Token = string(token)
 	return nil
 }
 
-func (o *Api) NewRequestPost(url string, data *strings.Reader) ([]byte, error) {
-	request, err := o.NewRequest2("POST", url, data, 200)
+func (o *Api) NewRequestPost(url string, data *strings.Reader) ([]byte, int, error) {
+	request, err := o.NewRequest("POST", url, data, 200)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return request.ResponseBody, nil
+	return request.ResponseBody, request.Response.StatusCode, nil
 }
-
-//func (o *Api) NewRequestAuth(method, resource string, body []byte, expectCode int) (*Request, error) {
-//	request := &Request{
-//		Debug: o.Debug,
-//		//Url:           fmt.Sprintf("%s/%s", o.Host, resource),
-//		Url:    resource,
-//		Method: method,
-//		//Authorization: o.Token,
-//	}
-//
-//	if body != nil {
-//		request.Body = body
-//	}
-//	err := request.Make()
-//	if err != nil {
-//		return nil, err
-//	}
-//	if request.Response.StatusCode != expectCode {
-//		return request, fmt.Errorf(
-//			"wrong statusCode from API: %d, expect: %d, resource [%s], response: %s",
-//			request.Response.StatusCode,
-//			expectCode,
-//			resource,
-//			string(request.ResponseBody),
-//		)
-//	}
-//	return request, nil
-//}
-
-//func (o *Api) request(method, resource string) *Request {
-//	return &Request{
-//		Debug:         o.Debug,
-//		Url:           fmt.Sprintf("%s/%s", o.Host, resource),
-//		Method:        method,
-//		Authorization: o.Token,
-//	}
-//}
